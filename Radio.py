@@ -14,4 +14,4 @@ context = torch.zeros((1,1), dtype=torch.long).to(device)
 torch.manual_seed(123)
 with open('DiVinoCommedia.txt', 'w', encoding = 'utf-8') as f:
         
-    f.write(decode(model.generate(context, max_new_tokens=5000)[0].tolist()))
+    f.write(decode(model.generate(context, max_new_tokens=1000, T=0.7)[0].tolist()))
