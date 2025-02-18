@@ -1,13 +1,17 @@
 import torch
 import torch.nn as nn
+import re
 from torch.nn import functional as F
 
 #----------------------------------------
 def get_stats(tokens):
     counts = {}
+
     for pair in zip(tokens,tokens[1:]):
+        if pair[0] == tok_encode('<sos>')[0] or pair[0] == tok_encode('<eos>')[0] or pair[1] == tok_encode('<sos>')[0] or pair[1] == tok_encode('<eos>')[0]:
+            counts[pair] = 0
         counts[pair] = counts.get(pair, 0) + 1
-    return counts 
+    return counts \
 
 def merge(ids, pair, idx):
     newids = []
@@ -24,34 +28,41 @@ def merge(ids, pair, idx):
 
 #----------------------------------------
 # hyperparams
-batch_size = 128
-block_size = 64  #context length
+batch_size = 64
+context_len = 32 
 vocab_size = 64
-n_emb = 64 
-max_iters = 4000
+n_emb = 128 
+max_iters = 3500
 eval_interval = 250  #every how many iters the loss is printed
-learning_rate = 3e-3
+learning_rate = 8e-3
 device = 'mps' if torch.backends.mps.is_available() else 'cpu'
 eval_iters = 200 
 n_head = 4 
-n_mul_att = 4 
-drop = 0.2 # dropout percentage
+n_mul_att = 8 
+drop = 0.1 # dropout percentage
 
 #----------------------------------------
 torch.manual_seed(12)
 # import text
-with open('DivinaCommedia(input).txt', 'r', encoding = 'utf-8') as f:
+with open('dialogs_clean.txt', 'r', encoding = 'utf-8') as f:
     text = f.read()
 
 # separate char and create alpha
 chars = sorted(list(set(text)))
+chars.append('<sos>')
+chars.append('<eos>')
 #vocab_size = len(chars)
 
 # convert to numbers (enco-deco)
 stoi = { ch:i for i,ch in enumerate(chars)}
 itos = { i:ch for i,ch in enumerate(chars)}
-tok_encode = lambda s: [ stoi[c] for c in s]
-tok_decode = lambda l:  ''.join([itos[i] for i in l ])
+tok_decode = lambda i: [itos[c] for c in i]
+def tok_encode(s):
+    s = re.sub(r'<sos>', '+', s)
+    s = re.sub(r'<eos>', '_', s)
+
+    d = {'+':stoi['<sos>'],'_':stoi['<eos>']}
+    return [d[c] if c in ['+','_'] else stoi[c] for c in s]
 
 # TOKENS TRAINING TIME
 #tokens = list(text.encode("utf-8"))
@@ -93,7 +104,7 @@ def decode(ids):
 
 # create data train and test
 data = torch.tensor(encode(text, tokens), dtype=torch.long, device=device)
-n = int(0.9*len(data))
+n = int(0.95*len(data))
 train_data = data[:n]
 val_data = data[n:]
 
@@ -101,9 +112,9 @@ val_data = data[n:]
 def get_batch(split):
     # generate a small batch of data of inputs x and targets y
     data = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([data[i:i+block_size] for i in ix])
-    y = torch.stack([data[i+1:i+block_size+1] for i in ix])
+    ix = torch.randint(len(data) - context_len, (batch_size,))
+    x = torch.stack([data[i:i+context_len] for i in ix])
+    y = torch.stack([data[i+1:i+context_len+1] for i in ix])
     return x, y
 
 @torch.no_grad()
@@ -126,7 +137,7 @@ class Head(nn.Module):
         self.key = nn.Linear(n_emb, head_size, bias=False)
         self.query = nn.Linear(n_emb, head_size, bias=False)
         self.value = nn.Linear(n_emb, head_size, bias=False)
-        self.register_buffer('tril', torch.tril(torch.ones(block_size,block_size)))
+        self.register_buffer('tril', torch.tril(torch.ones(context_len,context_len)))
         self.drop = nn.Dropout(drop)
 
     def forward(self, x):
@@ -149,7 +160,7 @@ class MultiHeadAttention(nn.Module):
 
     def __init__(self, num_heads, head_size):
         super().__init__()
-        self.heads = nn.ModuleList(Head(head_size) for _ in range(num_heads))
+        self.heads = nn.ModuleList( Head(head_size) for _ in range(num_heads) )
         self.proj = nn.Linear(n_emb, n_emb)
         self.drop = nn.Dropout(drop)
 
@@ -188,7 +199,7 @@ class BigramLanguageModel(nn.Module):
         super().__init__()
         # each token directly reads off the logits for the next token from a lookup table
         self.token_embedding_table = nn.Embedding(vocab_size, n_emb) 
-        self.position_embedding_table = nn.Embedding(block_size, n_emb)
+        self.position_embedding_table = nn.Embedding(context_len, n_emb)
         self.blocks = nn.Sequential(*[Block(n_emb, n_head=n_head) for _ in range(n_mul_att)],)
         self.l_n = nn.LayerNorm(n_emb)
         self.lm_head = nn.Linear(n_emb, vocab_size) 
@@ -217,9 +228,10 @@ class BigramLanguageModel(nn.Module):
     
     def generate(self, idx, max_new_tokens, T):
         # idx is (B, T) array of indices in the current context
+        len_input = idx.shape[1]
         for _ in range(max_new_tokens):
-            # resize idx to the last block_size tokens
-            idx_cond = idx[:, -block_size:]
+            # resize idx to the last context_len tokens
+            idx_cond = idx[:, -context_len:]
             # get the predictions
             logits, loss = self(idx_cond)
             # focus only on the last time step
@@ -232,8 +244,10 @@ class BigramLanguageModel(nn.Module):
             idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
             # append sampled index to the running sequence
             idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
-        
-        return idx
+            if idx_next[0][0] == tok_encode('<eos>')[0]:
+                break
+
+        return idx[:, len_input:][0]
     
 
  
@@ -246,6 +260,7 @@ if __name__ == "__main__":
         
         # create optimizer
         optimizer = torch.optim.AdamW(m.parameters(), lr = learning_rate)
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.999)
         
         
         for iter in range(max_iters):
@@ -263,10 +278,11 @@ if __name__ == "__main__":
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
+            scheduler.step()
         
         m.eval()
         torch.save(m.state_dict(), 'BumbleBee_state_dict.pth')    
         
-        context = torch.zeros((1,1), dtype=torch.long).to(device)
-        print(decode(m.generate(context, max_new_tokens=1000, T=1.0)[0].tolist()))
+        #context = torch.zeros((1,1), dtype=torch.long).to(device)
+        #print(decode(m.generate(context, max_new_tokens=1000, T=1.0)[0].tolist()))
         
