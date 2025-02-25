@@ -37,7 +37,7 @@ eval_interval = 250  #every how many iters the loss is printed
 learning_rate = 8e-3
 device = 'mps' if torch.backends.mps.is_available() else 'cpu'
 eval_iters = 200 
-n_head = 8 
+n_head = 16 
 n_mul_att = 4 
 drop = 0.1 # dropout percentage
 
