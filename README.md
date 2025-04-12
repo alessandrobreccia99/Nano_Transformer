@@ -1,6 +1,6 @@
 # 🧠 Transformer
 
-_Transformer-dencoder-based ChatBot_  
+_Transformer-decoder-based ChatBot_  
 
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![Framework](https://img.shields.io/badge/framework-PyTorch-red)
